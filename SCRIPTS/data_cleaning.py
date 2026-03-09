@@ -130,6 +130,10 @@ def main():
 
     combined_df = combined_df[combined_df["month"].between(common_start, common_end)]
 
+    # Compute month-over-month rent growth per ZIP code
+    combined_df = combined_df.sort_values(["ZIP CODE", "month"])
+    combined_df["rent_growth"] = combined_df.groupby("ZIP CODE")["rent_price"].pct_change()
+
     # Save cleaned dataset in DATA folder.
     out_path = DATA_PATH / "cleaned_chicago_dataset.csv"
     combined_df.to_csv(out_path, index=False)
