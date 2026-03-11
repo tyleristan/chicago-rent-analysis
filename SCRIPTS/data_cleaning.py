@@ -20,7 +20,7 @@ def normalize_zip(zip_series):
     zip_digits = zip_str.str.extract(r"(\d{5})")[0]
     return zip_digits
 
-# Load and process Zillow rent data to a monthly time series.
+# Load and process Zillow rent data to a monthly time series
 def load_rent_data(data_path):
     rent_df = pd.read_csv(data_path / "Zillow_Rent_Prices.csv")
 
@@ -46,8 +46,62 @@ def load_rent_data(data_path):
     rent_long = rent_long[rent_long["ZIP CODE"].str.match(r"^60[6-8]", na=False)]
 
     return rent_long
+# Map license descriptions into business-type groups using exact values
+def categorize_business_group(description):
+    """Map license descriptions into business-type groups using exact values."""
+    if not isinstance(description, str):
+        return "Other"
 
-# Load and process business license data, count openings per month in each ZIP code.
+    d = description.strip()
+
+    nightlife = {
+        "Caterer's Liquor License",
+        "Caterer's Registration (Liquor)",
+        "Outdoor Patio",
+        "Late Hour",
+        "Music and Dance",
+        "Riverwalk Venue Liquor License",
+    }
+
+    retail = {
+        "Pop-Up Retail User",
+        "Secondhand Dealer",
+        "Retail Food Establishment",
+        "Produce Merchant",
+    }
+
+    lifestyle = {
+        "Body Piercing",
+        "Grooming Facility",
+        "Massage Establishment",
+        "Massage Therapist",
+    }
+
+    food_hospitality = {
+        "Bed-And-Breakfast Establishment",
+        "Food - Shared Kitchen",
+        "Food - Shared Kitchen - Supplemental",
+        "Hotel",
+        "Shared Kitchen User (Long Term)",
+        "Shared Kitchen User (Short Term)",
+        "Retail Food Establishment",
+        "Retail Food Est.-Supplemental License for Dog-Friendly Areas",
+        "Retail Food - Seasonal Lakefront Food Establishment",
+    }
+
+    if d in nightlife:
+        return "Nightlife"
+    if d in retail:
+        return "Retail"
+    if d in lifestyle:
+        return "Lifestyle services"
+    if d in food_hospitality:
+        return "Food and hospitality"
+
+    return "Other"
+
+
+# Load and process business license data, count openings per month in each ZIP code
 def load_business_data(data_path):
     licenses_df = pd.read_csv(data_path / "Business_Licenses_Chicago.csv")
 
@@ -56,13 +110,13 @@ def load_business_data(data_path):
     licenses_df = licenses_df.dropna(subset=["ZIP CODE"])
     licenses_df = licenses_df[licenses_df["ZIP CODE"].str.match(r"^60[6-8]", na=False)]
 
-    # Use the license term start date to represent the opening month.
+    # Use the license term start date to represent the opening month
     licenses_df["LICENSE TERM START DATE"] = pd.to_datetime(
         licenses_df["LICENSE TERM START DATE"], errors="coerce"
     )
     licenses_df = licenses_df.dropna(subset=["LICENSE TERM START DATE"])
 
-    # For each license (by LICENSE NUMBER), keep only the earliest start date as the "opening".
+    # For each license (by LICENSE NUMBER), keep only the earliest start date as the opening
     if "LICENSE NUMBER" in licenses_df.columns:
         licenses_df = (
             licenses_df
@@ -74,6 +128,9 @@ def load_business_data(data_path):
         licenses_df["LICENSE TERM START DATE"].dt.to_period("M").dt.to_timestamp()
     )
 
+    # Compute the requested business-type group for each license record
+    licenses_df["business_group"] = licenses_df["LICENSE DESCRIPTION"].apply(categorize_business_group)
+
     # Count unique licenses opening per ZIP/month
     count_col = "LICENSE NUMBER" if "LICENSE NUMBER" in licenses_df.columns else "LICENSE ID"
     business_monthly = (
@@ -84,10 +141,38 @@ def load_business_data(data_path):
         .reset_index(name="business_openings")
     )
 
+    # Also count by group categories and merge into the same frame
+    group_counts = (
+        licenses_df
+        .groupby(["ZIP CODE", "month", "business_group"], dropna=False)
+        [count_col]
+        .nunique()
+        .reset_index(name="group_openings")
+    )
+
+    group_pivot = (
+        group_counts
+        .pivot_table(
+            index=["ZIP CODE", "month"],
+            columns="business_group",
+            values="group_openings",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+
+    group_pivot.columns = [
+        "ZIP CODE" if c == "ZIP CODE" else "month" if c == "month" else f"openings_{str(c).strip().replace(' ', '_')}"
+        for c in group_pivot.columns
+    ]
+
+    business_monthly = business_monthly.merge(group_pivot, on=["ZIP CODE", "month"], how="left")
+    business_monthly.fillna(0, inplace=True)
+
     return business_monthly
 
 
-# Combine rent and business openings into a single monthly time series. Join using (ZIP CODE, month) pairs.
+# Combine rent and business openings into a single monthly time series
 def build_combined_dataset(rent_long, business_monthly):
     # Create a set of (ZIP CODE, month) keys
     keys = (
